@@ -3,6 +3,7 @@ package com.fakenews.server.domain.post.entity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
 
@@ -19,6 +20,7 @@ public class Post {
     
     private Long originalPostId;
 
+    @Column(nullable = false, length = 10000)
     private String content;
 
     private Boolean isInitial;
@@ -27,14 +29,23 @@ public class Post {
     @Column(name = "created_at",updatable = false)
     private LocalDateTime createdAt;
 
-    @CreationTimestamp
+    @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
-    @Column(name = "deleted", insertable = false)
+    @Column(name = "deleted")
     private Boolean deleted;
 
     private Long userId;
 
     private Long simulationAgentId;
+
+    public static Post create(String content, Long userId) {
+        Post post = new Post();
+        post.content = content;
+        post.userId = userId;
+        post.isInitial = false;
+        post.deleted = false;
+        return post;
+    }
 }
