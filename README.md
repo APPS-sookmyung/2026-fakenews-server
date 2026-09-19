@@ -137,3 +137,24 @@ Invoke-RestMethod -Method Get -Uri "http://localhost:8080/api/auth/me" -Headers 
 ```bash
 git commit -m "#1 feat: 회원가입 API 구현"
 ```
+
+## 게시글 작성 API (MVP)
+
+로그인한 사용자가 텍스트 본문을 작성합니다. 이미지·영상 업로드, 해시태그, 게시글 타입 선택, AI 글쓰기 보조는 포함하지 않습니다.
+
+| Method | URL | 인증 | 설명 |
+| --- | --- | --- | --- |
+| `POST` | `/api/posts` | Bearer | 게시글 작성 |
+| `GET` | `/api/posts/{postId}` | Bearer | 작성된 게시글 조회 |
+
+기존 `/post/register`, `/post/{postId}` 주소도 지원합니다.
+
+요청 본문:
+
+```json
+{"content":"첫 번째 게시글입니다.\n본문을 작성합니다."}
+```
+
+`content`는 필수이며 공백만 입력할 수 없고 최대 10,000자입니다. 작성자는 JWT의 사용자로 지정합니다. 클라이언트가 작성자 ID를 전달해도 사용하지 않습니다.
+
+성공 시 `201 Created`와 `{"postId":1}`을 반환합니다. 본문 검증 실패는 `400`, 인증 실패는 `401`, 없는 게시글 조회는 `404`를 반환합니다.
