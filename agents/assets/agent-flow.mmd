@@ -1,0 +1,23 @@
+flowchart TD
+    MAIN["main.py: 전체 실행 관리"]
+    R["retrieval_agent.py<br/>정보 수집·정리"]
+    RT["retrieval_tools.py<br/>게시글·기억·성향 조회"]
+    P["planning_agent.py<br/>행동 결정·댓글 생성"]
+    C["critic_agent.py<br/>제안 검토"]
+    CT["critic_tools.py<br/>형식·규칙 검사"]
+    A["action_agent.py<br/>승인 확인·실행 분기"]
+    AT["action_tools.py<br/>좋아요·댓글·재게시 API"]
+    M["memory_agent.py<br/>기록할 경험 정리"]
+    MT["memory_tools.py<br/>기억 저장·수정"]
+
+    MAIN --> R
+    R <--> RT
+    R -->|context| P
+    P -->|decision| C
+    C <--> CT
+    C -->|수정 요청 · 최대 1회| P
+    C -->|승인| A
+    A <--> AT
+    A -->|실제 실행 결과| M
+    C -->|거절 · 실행 생략| M
+    M <--> MT
