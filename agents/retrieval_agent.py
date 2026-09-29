@@ -1,45 +1,115 @@
-"""
-RetrievalAgent — 상황 수집 에이전트
-담당: A
+"""게시글에 반응하기 전에 필요한 정보를 조회하는 에이전트."""
 
-어떤 에이전트인가요?
-게시글에 반응하기 전에 필요한 정보를 모읍니다.
-노출된 글, 이 참여자의 과거 기억, 작성자와의 관계, 참여자의 성향을
-한데 묶어 PlanningAgent에 전달합니다.
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-구현해야 하는 기능
-1. 게시글 조회: 본문, 작성자, 작성 시각, 삭제 여부를 가져옵니다.
-2. 기억 조회: 같은 실험·참여자의 과거 반응과 관련 기억을 검색합니다.
-3. 관계·성향 조회: 참여자의 페르소나, 관심사, 작성자와의 관계를 가져옵니다.
-4. 정보 정리: 조회 결과를 context로 묶고 출처와 누락 정보를 표시합니다.
-5. 예외 처리: 기억이 없는 정상 상황과 조회 실패를 구분합니다.
-   게시글이 없거나 필수 성향을 읽지 못하면 실행 중단 사유를 반환합니다.
+from .tools.retrieval_tools import build_retrieval_tools
 
-연결할 툴
-- get_post: 게시글 조회. 현재 서버의 GET /api/posts/{postId} 연결.
-- search_memories: 실험 ID와 참여자 ID로 기억 조회. 저장소는 구현 필요.
-- get_profile_and_relationship: 관계·성향 조회. 서버 명세는 구현 전 합의 필요.
-이 툴을 완성하면 아래 run의 정보 수집 부분에서 호출하세요.
-조회는 정해진 코드로 시작해도 됩니다. LLM 호출은 필수가 아닙니다.
 
-받는 값
-event: simulation_id, actor_id, post_id, exposure_id
-actor_id는 시뮬레이션 참여자이며 로그인 사용자 ID와 같다고 가정하지 않습니다.
+def _memory_lookup(simulation_id: int | str, actor_id: int | str) -> list:
+    """Default memory provider; connect this to the project's memory store."""
+    return []
 
-돌려줄 값
-context: event, post, memories, profile, relationship, retrieval_errors
-실패를 빈 데이터로 숨기지 않습니다.
 
-다음 연결
-main.py → RetrievalAgent → PlanningAgent
-context에 필수 조회 오류가 있으면 main.py에서 종료 결과를 기록합니다.
-"""
+def _profile_lookup(actor_id: int | str) -> Mapping:
+    """Default profile provider; connect this to the participant store."""
+    return {}
 
-# TODO: class RetrievalAgent
-# TODO: 필요한 조회 툴을 전달받는 초기화 부분
-# TODO: run(event) → context
-# 아래에 구현하세요.
 
-# 툴 연결: tools/__init__.py의 tool_groups["retrieval"]를 main.py에서 전달받아 이 에이전트의 run에서 호출하세요.
+def _relationship_lookup(actor_id: int | str, author_id: int | str) -> Mapping:
+    """Default relationship provider; connect this to the relationship store."""
+    return {}
 
-# 툴 구현 파일: tools/retrieval_tools.py에 관련 함수를 함께 작성하세요.
+
+class RetrievalAgent:
+    """조회 도구를 호출해 PlanningAgent에 전달할 context를 구성합니다."""
+
+    REQUIRED_TOOLS = frozenset({
+        "get_post",
+        "search_memories",
+        "get_profile_and_relationship",
+    })
+
+    def __init__(self):
+        # Named attributes let run() call the three retrieval functions directly.
+        (
+            self.get_post,
+            self.search_memories,
+            self.get_profile_and_relationship,
+        ) = build_retrieval_tools(
+            _memory_lookup,
+            _profile_lookup,
+            _relationship_lookup,
+        )
+
+    def run(self, event: Mapping[str, Any]) -> dict:
+        """event를 조회해 Planner가 요구하는 context를 반환합니다."""
+        if not isinstance(event, Mapping):
+            raise ValueError("event는 객체여야 합니다.")
+
+        for key in ("simulation_id", "actor_id", "post_id", "exposure_id"):
+            if key not in event or event[key] is None:
+                raise ValueError(f"event.{key}가 필요합니다.")
+
+        context = {
+            "event": dict(event),
+            "post": None,
+            "memories": [],
+            "profile": None,
+            "relationship": {},
+            "retrieval_errors": [],
+        }
+
+        try:
+            post = self.get_post(event["post_id"])
+            if not isinstance(post, Mapping) or not post:
+                raise ValueError("게시글 조회 결과가 비어 있거나 객체가 아닙니다.")
+            context["post"] = dict(post)
+        except Exception as exc:
+            context["retrieval_errors"].append({
+                "source": "get_post",
+                "message": str(exc),
+            })
+
+        # 게시글 조회 실패 시 작성자 ID를 알 수 없으므로 나머지 조회는 건너뜁니다.
+        if context["post"] is not None:
+            try:
+                memories = self.search_memories(
+                    event["simulation_id"], event["actor_id"]
+                )
+                if memories is None:
+                    memories = []
+                if isinstance(memories, (str, bytes, Mapping)) or not isinstance(
+                    memories, Sequence
+                ):
+                    raise ValueError("기억 조회 결과는 목록이어야 합니다.")
+                context["memories"] = list(memories)
+            except Exception as exc:
+                context["retrieval_errors"].append({
+                    "source": "search_memories",
+                    "message": str(exc),
+                })
+
+            try:
+                result = self.get_profile_and_relationship(
+                    event["simulation_id"],
+                    event["actor_id"],
+                    context["post"].get("userId"),
+                )
+                if not isinstance(result, Mapping):
+                    raise ValueError("성향·관계 조회 결과는 객체여야 합니다.")
+                profile = result.get("profile")
+                if not isinstance(profile, Mapping) or not profile:
+                    raise ValueError("참여자 profile 조회 결과가 비어 있습니다.")
+                relationship = result.get("relationship") or {}
+                if not isinstance(relationship, Mapping):
+                    raise ValueError("relationship 조회 결과는 객체여야 합니다.")
+                context["profile"] = dict(profile)
+                context["relationship"] = dict(relationship)
+            except Exception as exc:
+                context["retrieval_errors"].append({
+                    "source": "get_profile_and_relationship",
+                    "message": str(exc),
+                })
+
+        return context
