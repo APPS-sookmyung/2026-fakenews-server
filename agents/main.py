@@ -30,14 +30,27 @@ tools/__init__.py에 import와 tool_groups 등록을 직접 추가한 뒤,
 별도 등록 프레임워크는 아직 정하지 않습니다.
 
 현재 상태
-PlanningAgent는 구현되었으며 planning_example.py에서 단독 예제를 실행할 수 있습니다.
-나머지 에이전트/서버 호출 및 전체 실행 진입점은 미구현입니다.
+PlanningAgent, CriticAgent, MemoryAgent는 구현되었습니다.
+조회/행동 API 및 전체 실행 진입점은 아직 미구현입니다.
 """
 
 # TODO: 각 에이전트 import
 # TODO: 툴/모델 준비 및 에이전트 생성
 # TODO: run(event) — 위 순서와 분기 연결
 # 아래에 구현하세요.
+
+from .critic_agent import CriticAgent
+from .memory_agent import MemoryAgent
+from .tools import tool_groups
+
+
+def create_review_memory_agents(*, model_call=None, db_path=None, max_comment_length=None):
+    """통합 흐름에서 사용할 두 에이전트에 등록된 툴을 연결한다."""
+    return (
+        CriticAgent(tools=tool_groups["critic"], model_call=model_call,
+                    max_comment_length=max_comment_length),
+        MemoryAgent(tools=tool_groups["memory"], db_path=db_path),
+    )
 
 
 # 툴 연결: from .tools import tool_groups를 작성하고 각 그룹을 해당 에이전트에 전달하세요(연결 완료 후 저장소 루트에서 python -m agents.main 방식 사용).

@@ -23,3 +23,13 @@
 # from .tools import tool_groups
 # retrieval_agent = RetrievalAgent(tools=tool_groups["retrieval"])
 # 위 생성자 형식은 제안입니다. 각 에이전트가 tools를 받아 run에서 사용하는 부분도 직접 구현하세요.
+
+from .critic_tools import validate_action
+from .memory_tools import save_memory, update_memory_result
+from .retrieval_tools import search_memories
+
+tool_groups = {
+    "critic": [validate_action],
+    "memory": [save_memory, update_memory_result],
+    "retrieval": [search_memories],
+}

@@ -5,3 +5,6 @@
 # 연결: 완성한 함수를 __init__.py에서 import하고 해당 tool_groups에 등록하세요.
 
 # TODO: 아래에 함수들을 구현하세요.
+
+# 저장과 조회는 동일한 SQLite 저장소 및 경험 스키마를 사용한다.
+from .memory_tools import search_memories
