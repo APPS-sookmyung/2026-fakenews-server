@@ -48,4 +48,11 @@ public class Post {
         post.deleted = false;
         return post;
     }
+
+    public static Post createInSimulation(String content, com.fakenews.server.domain.participant.entity.Participant author) {
+        Post post = create(content, author.getUserId());
+        post.simulationId = author.getSimulationId();
+        post.participantId = author.getId();
+        return post;
+    }
 }

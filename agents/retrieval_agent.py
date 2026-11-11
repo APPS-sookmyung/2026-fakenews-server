@@ -1,44 +1,76 @@
-"""
-RetrievalAgent — 상황 수집 에이전트
+"""게시글·참여자 프로필·기억을 모으고 조회 오류와 누락 정보를 표시한다."""
+from collections.abc import Mapping
+from copy import deepcopy
+from .tools.retrieval_tools import RetrievalError, get_post, get_profile_and_relationship, search_memories
 
-어떤 에이전트인가요?
-게시글에 반응하기 전에 필요한 정보를 모읍니다.
-노출된 글, 이 참여자의 과거 기억, 작성자와의 관계, 참여자의 성향을
-한데 묶어 PlanningAgent에 전달합니다.
 
-구현해야 하는 기능
-1. 게시글 조회: 본문, 작성자, 작성 시각, 삭제 여부를 가져옵니다.
-2. 기억 조회: 같은 실험·참여자의 과거 반응과 관련 기억을 검색합니다.
-3. 관계·성향 조회: 참여자의 페르소나, 관심사, 작성자와의 관계를 가져옵니다.
-4. 정보 정리: 조회 결과를 context로 묶고 출처와 누락 정보를 표시합니다.
-5. 예외 처리: 기억이 없는 정상 상황과 조회 실패를 구분합니다.
-   게시글이 없거나 필수 성향을 읽지 못하면 실행 중단 사유를 반환합니다.
+class RetrievalAgent:
+    def __init__(self, tools=None, *, base_url="http://localhost:8080", token=None,
+                 db_path=None, timeout=10, memory_limit=20):
+        registered = {tool.__name__: tool for tool in (
+            tools if tools is not None else [get_post, get_profile_and_relationship, search_memories])}
+        self.get_post = registered["get_post"]
+        self.get_profile = registered["get_profile_and_relationship"]
+        self.search_memories = registered["search_memories"]
+        if timeout <= 0 or type(memory_limit) is not int or memory_limit < 1:
+            raise ValueError("timeout과 memory_limit은 양수여야 합니다.")
+        self.http = dict(base_url=base_url, token=token, timeout=timeout)
+        self.db_path = db_path
+        self.memory_limit = memory_limit
 
-연결할 툴
-- get_post: 게시글 조회. 현재 서버의 GET /api/posts/{postId} 연결.
-- search_memories: 실험 ID와 참여자 ID로 기억 조회. 저장소는 구현 필요.
-- get_profile_and_relationship: 관계·성향 조회. 서버 명세는 구현 전 합의 필요.
-이 툴을 완성하면 아래 run의 정보 수집 부분에서 호출하세요.
-조회는 정해진 코드로 시작해도 됩니다. LLM 호출은 필수가 아닙니다.
-
-받는 값
-event: simulation_id, actor_id, post_id, exposure_id
-actor_id는 시뮬레이션 참여자이며 로그인 사용자 ID와 같다고 가정하지 않습니다.
-
-돌려줄 값
-context: event, post, memories, profile, relationship, retrieval_errors
-실패를 빈 데이터로 숨기지 않습니다.
-
-다음 연결
-main.py → RetrievalAgent → PlanningAgent
-context에 필수 조회 오류가 있으면 main.py에서 종료 결과를 기록합니다.
-"""
-
-# TODO: class RetrievalAgent
-# TODO: 필요한 조회 툴을 전달받는 초기화 부분
-# TODO: run(event) → context
-# 아래에 구현하세요.
-
-# 툴 연결: tools/__init__.py의 tool_groups["retrieval"]를 main.py에서 전달받아 이 에이전트의 run에서 호출하세요.
-
-# 툴 구현 파일: tools/retrieval_tools.py에 관련 함수를 함께 작성하세요.
+    def run(self, event):
+        if not isinstance(event, Mapping):
+            raise ValueError("event는 객체여야 합니다.")
+        # Spring의 Long 식별자와 타입을 맞춘다. bool과 문자열 ID는 허용하지 않는다.
+        for key in ("simulation_id", "actor_id", "post_id"):
+            if type(event.get(key)) is not int or not 0 < event[key] <= 9223372036854775807:
+                raise ValueError(f"{key}는 양의 Long 정수여야 합니다.")
+        exposure = event.get("exposure_id")
+        if not (type(exposure) is int and exposure > 0 or isinstance(exposure, str) and exposure.strip()):
+            raise ValueError("exposure_id가 필요합니다.")
+        context = dict(event=deepcopy(dict(event)), post={}, profile={}, memories=[],
+                       relationship={"status": "UNAVAILABLE"}, retrieval_errors=[],
+                       sources={"post": "spring", "profile": "spring", "memories": "sqlite"},
+                       missing_information=["relationship"])
+        try:
+            post = self.get_post(event["post_id"], **self.http)
+            if (not isinstance(post, Mapping) or type(post.get("id")) is not int
+                    or post["id"] != event["post_id"]):
+                raise ValueError("조회 게시글 ID 불일치")
+            if post.get("deleted") is not False:
+                raise ValueError("삭제되었거나 삭제 상태를 확인할 수 없는 게시글")
+            if not isinstance(post.get("content"), str) or not post["content"].strip():
+                raise ValueError("게시글 본문 누락")
+            simulation_id = post.get("simulation_id")
+            # 일반 사용자의 게시글은 아직 simulationId가 null일 수 있다.
+            if simulation_id is not None and (type(simulation_id) is not int or simulation_id != event["simulation_id"]):
+                raise ValueError("게시글의 실험 ID 불일치")
+            context["post"] = deepcopy(dict(post))
+        except RetrievalError as exc:
+            context["retrieval_errors"].append(f"post: {exc}")
+        except Exception:
+            context["retrieval_errors"].append("post: 게시글 조회 실패 또는 잘못된 응답")
+        try:
+            bundle = self.get_profile(event["simulation_id"], event["actor_id"], context["post"], **self.http)
+            profile = bundle["profile"]
+            if (type(profile.get("participant_id")) is not int or profile["participant_id"] != event["actor_id"]
+                    or type(profile.get("simulation_id")) is not int or profile["simulation_id"] != event["simulation_id"]
+                    or not isinstance(profile.get("description"), str) or not profile["description"].strip()
+                    or not isinstance(profile.get("interests"), list)
+                    or any(not isinstance(i, str) or not i.strip() for i in profile["interests"])):
+                raise ValueError("참여자 프로필 불일치 또는 누락")
+            context["profile"] = deepcopy(dict(profile))
+            context["relationship"] = deepcopy(bundle["relationship"])
+        except RetrievalError as exc:
+            context["retrieval_errors"].append(f"profile: {exc}")
+        except Exception:
+            context["retrieval_errors"].append("profile: 참여자 성향 조회 실패 또는 잘못된 응답")
+        try:
+            memories = self.search_memories(event["simulation_id"], event["actor_id"],
+                                           limit=self.memory_limit, db_path=self.db_path)
+            if not isinstance(memories, list):
+                raise ValueError("잘못된 기억 조회 응답")
+            context["memories"] = deepcopy(memories)
+        except Exception:
+            context["retrieval_errors"].append("memories: 기억 조회 실패")
+        return context
