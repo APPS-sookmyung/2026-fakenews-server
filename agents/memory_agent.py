@@ -1,6 +1,5 @@
 """
 MemoryAgent — 경험 기록 에이전트
-담당: 통합 담당 + A
 
 어떤 에이전트인가요?
 이번 게시글에 실제로 어떻게 반응했는지 저장합니다.
@@ -36,10 +35,48 @@ ActionAgent 또는 main.py의 중단 경로 → MemoryAgent → 종료
 기억 저장 실패 때문에 좋아요/댓글/재게시를 다시 실행하지 않습니다.
 """
 
-# TODO: class MemoryAgent
-# TODO: 기억 저장/수정 툴을 전달받는 초기화 부분
-# TODO: run(event, context, decision, critique, result) → memory_result
-# 아래에 구현하세요.
+import json
+import sqlite3
+
+from .tools.memory_tools import apply_result, memory_key, normalize_result, save_memory, update_memory_result
+
+
+class MemoryAgent:
+    """실행 결과에 근거한 경험 구성. 재시도는 저장 호출에만 적용한다."""
+
+    def __init__(self, tools=None, *, db_path=None, max_save_attempts=2):
+        if type(max_save_attempts) is not int or max_save_attempts < 1:
+            raise ValueError("max_save_attempts는 양의 정수여야 합니다.")
+        registered = {tool.__name__: tool for tool in tools} if tools is not None else {
+            "save_memory": save_memory, "update_memory_result": update_memory_result}
+        self.save = registered["save_memory"]
+        self.update = registered["update_memory_result"]
+        self.db_path = db_path
+        self.max_save_attempts = max_save_attempts
+
+    def _persist(self, tool, *args):
+        for attempt in range(self.max_save_attempts):
+            try:
+                return tool(*args, **({"db_path": self.db_path} if self.db_path is not None else {}))
+            except (OSError, sqlite3.OperationalError) as exc:
+                if attempt + 1 == self.max_save_attempts:
+                    return {"status": "FAILED", "memory_id": None, "error": str(exc)}
+            except Exception as exc:
+                return {"status": "FAILED", "memory_id": None, "error": str(exc)}
+
+    def run(self, event, context=None, decision=None, critique=None, result=None):
+        try:
+            memory_key(event)
+            normalized = normalize_result(decision, result)
+            memory = json.loads(json.dumps({"event": event, "context": context,
+                "decision": decision, "critique": critique}, ensure_ascii=False))
+            apply_result(memory, normalized)
+        except (TypeError, ValueError) as exc:
+            return {"status": "FAILED", "memory_id": None, "error": str(exc)}
+        return self._persist(self.save, memory)
+
+    def update_result(self, event, result):
+        return self._persist(self.update, event, result)
 
 # 툴 연결: tools/__init__.py의 tool_groups["memory"]를 main.py에서 전달받아 이 에이전트의 run에서 호출하세요.
 

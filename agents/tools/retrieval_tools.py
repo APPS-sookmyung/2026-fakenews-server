@@ -6,6 +6,8 @@
 
 # TODO: 아래에 함수들을 구현하세요.
 
+# 저장과 조회는 동일한 SQLite 저장소 및 경험 스키마를 사용한다.
+from .memory_tools import search_memories
 import json
 import os
 from collections.abc import Callable, Mapping

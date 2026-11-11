@@ -3,12 +3,12 @@
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .tools.retrieval_tools import build_retrieval_tools
+from .tools.retrieval_tools import build_retrieval_tools, search_memories
 
 
 def _memory_lookup(simulation_id: int | str, actor_id: int | str) -> list:
-    """Default memory provider; connect this to the project's memory store."""
-    return []
+    """MemoryAgent와 동일한 SQLite 저장소에서 경험을 조회한다."""
+    return search_memories(simulation_id, actor_id)
 
 
 def _profile_lookup(actor_id: int | str) -> Mapping:

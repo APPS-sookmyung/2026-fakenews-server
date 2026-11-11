@@ -1,4 +1,25 @@
-현재 파일들은 **게시글 하나를 보고 반응하는 과정을 역할별로 나눠 놓은 설계 틀**입니다. PlanningAgent는 예시 구현을 완료했고, 나머지 에이전트와 전체 연결은 TODO 상태입니다.
+현재 PlanningAgent, CriticAgent, MemoryAgent를 구현했습니다. RetrievalAgent, ActionAgent와 전체 실행 흐름은 아직 TODO 상태입니다.
+
+### CriticAgent와 MemoryAgent 사용
+
+```python
+from agents.main import create_review_memory_agents
+
+critic, memory = create_review_memory_agents(db_path="agents/data/memories.sqlite3")
+critique = critic.run(context, decision)
+# 통합 코드가 critique에 따라 실행하거나 생략한 실제 결과를 전달합니다.
+memory_result = memory.run(event, context, decision, critique, result)
+```
+
+Critic은 행동 종류, 필수값, 대상 일치, 댓글 본문을 검사해 `APPROVE`, `REVISE`, `REJECT`와 사유를 반환합니다. 대상 불일치와 조회 오류는 거절하고, 수정 가능한 형식 오류는 수정을 요청합니다. `model_call(system_prompt, input_json)`을 선택적으로 전달하면 규칙을 통과한 행동의 문맥·성향을 추가 검토합니다. 모델 오류나 잘못된 검토 응답은 승인하지 않습니다. SKIP에는 모델 검토를 생략합니다. 서버에서 합의한 댓글 길이가 있다면 `max_comment_length`로 전달하세요. 서버 중복 행동 정책은 아직 구현하지 않았습니다.
+
+Memory는 실제 결과의 `SUCCESS`, `FAILED`, `UNKNOWN`, `SKIPPED`를 구분합니다. 성공일 때만 `executed_action`과 성공 댓글의 `executed_content`를 기록합니다. 결과 누락은 `UNKNOWN`이며, 실행 전 종료한 경우 호출자가 종료 사유를 `error`에 넣은 `SKIPPED` 결과를 전달해야 합니다. 잘못된 실행 결과나 서로 다른 decision_id는 저장 실패로 반환합니다.
+
+기본 저장소는 `agents/data/memories.sqlite3`이며 `AGENT_MEMORY_DB` 또는 `db_path`로 변경할 수 있습니다. 동일 실험·참여자·노출의 재저장은 `DUPLICATE`, 최초 저장은 `SAVED`, 불명확한 결과 보정은 `UPDATED`, 저장 실패는 `FAILED`를 반환합니다. `memory.update_result(event, confirmed_result)` 또는 같은 제안의 확정 결과로 `run`을 다시 호출하면 UNKNOWN 기록을 갱신합니다. 확정된 결과의 충돌은 덮어쓰지 않습니다. 저장 재시도는 일시적인 파일/DB 오류에만 적용하며 행동 API를 호출하지 않습니다.
+
+조회는 `agents.tools.retrieval_tools.search_memories(simulation_id, actor_id, post_id=None, limit=20, db_path=...)`를 사용합니다. 선택 인자는 키워드로 전달하고, 저장과 조회에 같은 DB 경로를 지정하세요. 반환값은 event/context/decision/critique/result와 실제 실행 정보, 요약을 담은 경험 목록입니다.
+
+외부 API 없이 테스트: `python -m unittest agents.test_critic_memory -v`.
 
 PlanningAgent 예제는 저장소 루트에서 다음 순서로 실행합니다.
 
@@ -229,7 +250,7 @@ tool_groups = {
 
 이 파일을 공통 등록 위치로 사용하기로 정한 것이지, Python에서 툴을 반드시 이렇게 연결해야 하는 것은 아닙니다. 각 에이전트가 직접 import하는 방식도 가능합니다. 지금은 팀원들이 **“완성한 툴을 어디에 추가해야 하는지” 한곳에서 확인하도록** 모았습니다.
 
-현재 위 예시도 파일 안에서는 주석 상태입니다.
+현재 Critic, Memory 툴과 기억 조회 툴은 등록되어 있습니다. 나머지 툴은 구현 후 추가해야 합니다.
 
 **⑦ `main.py` — 전체를 조립하고 순서대로 실행하는 파일**
 
