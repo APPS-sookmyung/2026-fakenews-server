@@ -1,8 +1,25 @@
-# 행동 실행 툴 — : 아래 세 함수를 이 파일에 함께 구현합니다.
-# like_post: 승인된 좋아요 실행.
-# create_comment: 승인된 댓글 본문 등록.
-# repost_post: 승인된 게시글 재게시.
-# 세 API는 서버 명세 합의 후 연결합니다.
-# 연결: 완성한 함수를 __init__.py에서 import하고 해당 tool_groups에 등록하세요.
+"""합의된 서버 API 실행기를 연결하는 행동 툴. URL은 추측하지 않는다."""
 
-# TODO: 아래에 함수들을 구현하세요.
+class ActionFailed(RuntimeError):
+    """서버가 부작용 없음을 확인한 확정 실패."""
+
+
+def _execute(action, *, simulation_id, actor_id, post_id, content,
+             idempotency_key, executor=None, token=None):
+    if executor is None or not isinstance(token, str) or not token.strip():
+        raise ActionFailed("행동 API executor와 Bearer 토큰이 필요합니다.")
+    return executor(action=action, simulation_id=simulation_id, actor_id=actor_id,
+                    post_id=post_id, content=content, idempotency_key=idempotency_key,
+                    token=token)
+
+
+def like_post(**kwargs):
+    return _execute("LIKE", **kwargs)
+
+
+def create_comment(**kwargs):
+    return _execute("COMMENT", **kwargs)
+
+
+def repost_post(**kwargs):
+    return _execute("REPOST", **kwargs)

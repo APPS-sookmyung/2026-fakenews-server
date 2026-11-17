@@ -1,4 +1,4 @@
-현재 RetrievalAgent, PlanningAgent, CriticAgent, MemoryAgent를 구현했습니다. 조회→계획 연결을 사용할 수 있으며, ActionAgent와 전체 실행 루프는 아직 미구현입니다.
+현재 RetrievalAgent, PlanningAgent, CriticAgent, ActionAgent, MemoryAgent를 구현했습니다. 조회→계획 연결 및 개별 에이전트 생성 함수를 사용할 수 있으며 전체 실행 루프는 아직 미구현입니다.
 
 ### 서버 조회와 Planning 연결
 
@@ -290,7 +290,7 @@ tool_groups = {
 
 이 파일을 공통 등록 위치로 사용하기로 정한 것이지, Python에서 툴을 반드시 이렇게 연결해야 하는 것은 아닙니다. 각 에이전트가 직접 import하는 방식도 가능합니다. 지금은 팀원들이 **“완성한 툴을 어디에 추가해야 하는지” 한곳에서 확인하도록** 모았습니다.
 
-현재 Retrieval, Critic, Memory 툴은 등록되어 있습니다. Action 툴은 구현 후 추가해야 합니다.
+현재 Retrieval, Critic, Action, Memory 툴이 등록되어 있습니다. Action 툴은 합의된 서버 API executor를 주입해야 실행됩니다.
 
 **⑦ `main.py` — 전체를 조립하고 순서대로 실행하는 파일**
 
@@ -335,3 +335,37 @@ main.py가 그룹을 가져옴
 | 통합 담당 | `main.py` | 단계 연결과 분기 관리 |
 
 현재처럼 규모가 작으면 일부 파일을 합쳐도 됩니다. 지금 나눈 이유는 **각 팀원이 구현할 영역과 연결할 위치를 분명하게 보여주기 위해서**입니다.
+
+
+### ActionAgent 사용
+
+```python
+from agents.main import create_action_agent
+
+action = create_action_agent(executor=server_action_executor, token=access_token)
+result = action.run(event, decision, critique)
+# memory.run(event, context, decision, critique, result)
+```
+
+`server_action_executor`는 통합 담당자가 합의된 API에 연결하는 함수입니다.
+키워드 인자로 `action`, `simulation_id`, `actor_id`, `post_id`, `content`,
+`idempotency_key`, `token`을 받으며 `status`(SUCCESS/FAILED/UNKNOWN),
+`resource_id`, `error`를 담은 dict를 반환합니다. 성공에는 생성/확인된 리소스 ID가 필요합니다.
+서버가 부작용 없음을 확인한 거절만 FAILED 또는 `ActionFailed`로 전달하세요.
+타임아웃, 연결 오류, 잘못된 응답과 그 외 예외는 UNKNOWN입니다.
+예외 메시지는 인증 정보 유출을 막기 위해 결과에 복사하지 않습니다.
+
+현재 서버에 세 행동 API가 없으므로 기본 실행은 FAILED입니다.
+임의 URL이나 일반 게시글 작성 API를 호출하지 않습니다. 실제 어댑터는 서버에서
+실험 접근 권한, 참여자 소속과 명의 사용 권한을 검사하고 요청 키 중복 방지 및
+키에 의한 결과 조회를 지원해야 합니다. 인증 정보는 생성 시 전달하며 event와
+실행 대상은 신뢰된 호출자가 제공해야 합니다. decision의 작성자 정보는 사용하지 않습니다.
+
+현재 decision_id에 대한 APPROVE만 실행합니다. 댓글은 원문 그대로 보내며 SKIP은
+서버를 호출하지 않습니다. 동일 실험·참여자·노출에는 안정적인 요청 키를 사용합니다.
+같은 인스턴스에서 동일 제안을 다시 처리하면 저장된 결과를 반환하고, 다른 제안은
+차단합니다. UNKNOWN도 자동 재전송하지 않습니다. 캐시는 인스턴스 수명 동안 유지되므로
+재시작/다중 프로세스에서는 서버의 중복 방지가 필수입니다. UNKNOWN 확정 결과는 서버에서
+조회한 후 `memory.update_result(event, confirmed_result)`로 기록을 보정하세요.
+
+외부 API 없이 테스트: `python -m unittest agents.test_action -v`.

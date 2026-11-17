@@ -1,13 +1,18 @@
 """조회→계획 연결과 검토·기억 에이전트 생성.
 
-ActionAgent 및 승인/재계획/실행/기억 기록을 포함한 전체 실행 루프는 아직 없다.
+승인/재계획/실행/기억 기록을 포함한 전체 실행 루프는 아직 없다.
 retrieve_and_plan은 조회 오류가 있으면 모델을 호출하지 않고 decision=None을 반환한다.
 """
 from .critic_agent import CriticAgent
+from .action_agent import ActionAgent
 from .memory_agent import MemoryAgent
 from .tools import tool_groups
 from .retrieval_agent import RetrievalAgent
 from .planning_agent import PlanningAgent
+
+
+def create_action_agent(**kwargs):
+    return ActionAgent(tools=tool_groups["action"], **kwargs)
 
 
 def create_retrieval_agent(**kwargs):
