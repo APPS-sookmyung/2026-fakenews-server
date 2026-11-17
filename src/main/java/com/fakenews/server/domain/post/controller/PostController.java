@@ -26,8 +26,17 @@ public class PostController {
     }
 
     @GetMapping({"/api/posts/{postId}", "/post/{postId}"})
-    public PostReadResDto read(@PathVariable Long postId){
-        return postService.read(postId);
+    public PostReadResDto read(@PathVariable Long postId, Authentication authentication){
+        return postService.read(postId, authentication.getName());
+    }
+
+    @PostMapping("/api/simulations/{simulationId}/participants/{participantId}/posts")
+    @ResponseStatus(HttpStatus.CREATED)
+    public PostRegisterResDto registerInSimulation(@PathVariable Long simulationId,
+                                                   @PathVariable Long participantId,
+                                                   @Valid @RequestBody PostRegisterReqDto request,
+                                                   Authentication authentication) {
+        return postService.registerInSimulation(simulationId, participantId, request, authentication.getName());
     }
 
 }

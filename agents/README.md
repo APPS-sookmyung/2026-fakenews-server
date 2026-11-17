@@ -1,4 +1,44 @@
-현재 PlanningAgent, CriticAgent, MemoryAgent를 구현했습니다. RetrievalAgent, ActionAgent와 전체 실행 흐름은 아직 TODO 상태입니다.
+현재 RetrievalAgent, PlanningAgent, CriticAgent, MemoryAgent를 구현했습니다. 조회→계획 연결을 사용할 수 있으며, ActionAgent와 전체 실행 루프는 아직 미구현입니다.
+
+### 서버 조회와 Planning 연결
+
+`RetrievalAgent`는 Bearer 토큰으로 게시글과 참여자 프로필을 조회하고 SQLite 기억을 모아
+`event/post/profile/relationship/memories/retrieval_errors` 문맥을 반환합니다.
+서버 API는 `GET /api/posts/{postId}`와
+`GET /api/simulations/{simulationId}/participants/{participantId}/profile`입니다.
+서버가 실행 중이어야 하며 조회할 참여자와 게시글이 DB에 존재해야 합니다.
+`POST /api/simulations`로 실험을 만들고, 소유자 토큰으로
+`POST /api/simulations/{simulationId}/participants`에서 참여자를 등록합니다.
+실험 게시글은 `POST /api/simulations/{simulationId}/participants/{participantId}/posts`로 작성합니다.
+요청 본문과 권한 규칙은 루트 `README.md`를 참고하세요.
+조회 토큰은 실험 소유자 또는 해당 실험의 계정 연결 참여자여야 합니다. 외부 사용자는 403입니다.
+참여자는 URL의 실험에 속해야 하며 일치하지 않으면 404를 반환합니다.
+
+```python
+import os
+from agents.main import retrieve_and_plan
+from agents.gemini_model import gemini_model_call
+
+result = retrieve_and_plan(
+    {"simulation_id": 1, "actor_id": 7, "post_id": 20, "exposure_id": "exposure-100"},
+    model_call=gemini_model_call,
+    base_url="http://localhost:8080",
+    token=os.environ["AGENT_SERVER_TOKEN"],  # /auth/login에서 발급한 accessToken
+    db_path="agents/data/memories.sqlite3",
+)
+print(result)  # context와 decision. 조회 실패 시 decision은 None
+```
+
+실제 서버용 simulation_id/actor_id/post_id는 양의 정수입니다. 아래 독립 모듈 예제의
+`simulation-1` 같은 문자열 ID는 서버 조회에 사용하지 않습니다.
+일반 사용자 게시글의 simulationId=null은 허용하며 실험이 지정된 게시글은 event와 일치해야 합니다.
+빈 기억 목록은 정상이며 기억 DB 오류·인증 실패·타임아웃·삭제된 글·대상 불일치는
+`retrieval_errors`에 남기고 Planning을 호출하지 않습니다. 올바르지 않은 event는 ValueError로 반환합니다.
+출처는 `sources`, 누락 정보는 `missing_information`에 표시합니다.
+관계 저장소는 미구현이므로 `relationship.status=UNAVAILABLE`로 표시하고 판단 가능한 프로필·게시글로 계획합니다.
+이는 실제 관계가 없다는 뜻이 아닙니다. 이 함수는 행동 실행이나 경험 저장을 하지 않습니다.
+
+외부 서비스 없이 조회 통합 테스트: `python -m unittest agents.test_retrieval -v`.
 
 ### CriticAgent와 MemoryAgent 사용
 
@@ -250,7 +290,7 @@ tool_groups = {
 
 이 파일을 공통 등록 위치로 사용하기로 정한 것이지, Python에서 툴을 반드시 이렇게 연결해야 하는 것은 아닙니다. 각 에이전트가 직접 import하는 방식도 가능합니다. 지금은 팀원들이 **“완성한 툴을 어디에 추가해야 하는지” 한곳에서 확인하도록** 모았습니다.
 
-현재 Critic, Memory 툴과 기억 조회 툴은 등록되어 있습니다. 나머지 툴은 구현 후 추가해야 합니다.
+현재 Retrieval, Critic, Memory 툴은 등록되어 있습니다. Action 툴은 구현 후 추가해야 합니다.
 
 **⑦ `main.py` — 전체를 조립하고 순서대로 실행하는 파일**
 
