@@ -1,48 +1,91 @@
-"""
-ActionAgent — 행동 실행 에이전트
+"""승인된 제안을 그대로 실행한다. LLM 호출과 자동 재전송은 하지 않는다."""
+import hashlib
+import json
+from collections.abc import Mapping
+from copy import deepcopy
+from threading import Lock
 
-어떤 에이전트인가요?
-검토를 통과한 행동을 실제 서버 API로 실행합니다.
-이름은 Agent지만 추가 LLM 판단 없이 정해진 함수를 호출하는 실행 모듈입니다.
+from .tools.action_tools import ActionFailed, like_post, create_comment, repost_post
+from .tools.critic_tools import ACTIONS, same_id
 
-구현해야 하는 기능
-1. 승인 확인: APPROVE인지, 승인된 decision_id가 현재 제안과 같은지 확인합니다.
-2. 행동 분기: LIKE는 좋아요, COMMENT는 댓글, REPOST는 재게시 툴을 호출합니다.
-3. SKIP 처리: 서버 쓰기 호출 없이 SKIPPED 결과를 만듭니다.
-4. 중복 방지: 같은 노출 재처리에는 동일 요청 키를 사용합니다.
-5. 결과 정리: 성공, 확정 실패, 성공 여부 불명확을 구분합니다.
-6. 인증 처리: 신뢰된 참여자/실험 정보와 서버 인증 규칙에 맞게 실행합니다.
 
-연결할 툴
-- like_post: 좋아요 API
-- create_comment: 댓글 API
-- repost_post: 재게시 API
-완성한 툴은 아래 run의 action별 분기에 연결하세요.
-현재 서버에는 관련 엔티티만 있고 세 API는 아직 없습니다.
-일반 게시글 작성 API로 대체하지 말고 API 명세를 합의한 뒤 연결합니다.
+class ActionAgent:
+    """event는 호출자의 신뢰된 정보다. 재시작/다중 프로세스 중복은 서버가 막아야 한다."""
 
-받는 값
-event, decision, critique
+    def __init__(self, tools=None, *, executor=None, token=None):
+        registered = {tool.__name__: tool for tool in (
+            tools if tools is not None else [like_post, create_comment, repost_post])}
+        self.tools = {action: registered[name] for action, name in (
+            ("LIKE", "like_post"), ("COMMENT", "create_comment"), ("REPOST", "repost_post"))}
+        self.executor, self.token = executor, token
+        self._results = {}
+        self._lock = Lock()
 
-돌려줄 값
-result: decision_id, action, status, resource_id, error, idempotency_key
-status: SUCCESS / FAILED / UNKNOWN / SKIPPED
+    def run(self, event, decision, critique):
+        if not isinstance(event, Mapping):
+            raise ValueError("신뢰된 event가 필요합니다.")
+        for field in ("simulation_id", "actor_id", "post_id"):
+            if type(event.get(field)) is not int or not 0 < event[field] <= 9223372036854775807:
+                raise ValueError(f"{field}는 양의 Long 정수여야 합니다.")
+        exposure = event.get("exposure_id")
+        if not (type(exposure) is int and exposure > 0 or isinstance(exposure, str) and exposure.strip()):
+            raise ValueError("exposure_id가 필요합니다.")
+        key = "action-" + hashlib.sha256(json.dumps(
+            [event["simulation_id"], event["actor_id"], exposure],
+            ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+        decision = deepcopy(dict(decision)) if isinstance(decision, Mapping) else {}
+        result = dict(decision_id=decision.get("decision_id"), action=decision.get("action"),
+                      status="FAILED", resource_id=None, error=None, idempotency_key=key)
 
-다음 연결
-CriticAgent → ActionAgent → MemoryAgent
+        def stop(error, status="FAILED"):
+            return dict(result, status=status, error=error)
 
-주의할 점
-댓글 본문을 실행 직전에 새로 생성하거나 수정하지 않습니다.
-요청 키는 simulation_id + actor_id + exposure_id를 기준으로 안정적으로 생성합니다.
-서버도 같은 키의 중복 실행 방지와 결과 조회를 지원해야 합니다.
-타임아웃은 UNKNOWN으로 남기고 성공 여부를 확인하기 전 무조건 재전송하지 않습니다.
-"""
-
-# TODO: class ActionAgent
-# TODO: 좋아요/댓글/재게시 툴을 전달받는 초기화 부분
-# TODO: run(event, decision, critique) → result
-# 아래에 구현하세요.
-
-# 툴 연결: tools/__init__.py의 tool_groups["action"]를 main.py에서 전달받아 이 에이전트의 run에서 호출하세요.
-
-# 툴 구현 파일: tools/action_tools.py에 관련 함수를 함께 작성하세요.
+        if (not isinstance(decision.get("decision_id"), str) or not decision["decision_id"].strip()
+                or not isinstance(critique, Mapping) or critique.get("verdict") != "APPROVE"
+                or not same_id(critique.get("decision_id"), decision["decision_id"])):
+            return stop("현재 제안에 대한 승인이 없습니다.", "SKIPPED")
+        action = decision.get("action")
+        if not isinstance(action, str) or action not in ACTIONS:
+            return stop("허용되지 않은 행동입니다.")
+        if not same_id(decision.get("post_id"), event["post_id"]):
+            return stop("제안과 노출 대상이 다릅니다.")
+        content = decision.get("content")
+        if action == "COMMENT":
+            if not isinstance(content, str) or not content.strip():
+                return stop("댓글 본문이 필요합니다.")
+        elif content is not None:
+            return stop("COMMENT 이외의 content는 null이어야 합니다.")
+        fingerprint = json.dumps([event["post_id"], decision], sort_keys=True, ensure_ascii=False)
+        with self._lock:
+            if key in self._results:
+                previous, saved = self._results[key]
+                if previous != fingerprint:
+                    return stop("같은 노출에 다른 제안이 이미 처리되었습니다.")
+                return deepcopy(saved)
+            if action == "SKIP":
+                result["status"] = "SKIPPED"
+            else:
+                try:
+                    response = self.tools[action](
+                        simulation_id=event["simulation_id"], actor_id=event["actor_id"],
+                        post_id=event["post_id"], content=content, idempotency_key=key,
+                        executor=self.executor, token=self.token)
+                    if not isinstance(response, Mapping) or response.get("status") not in ("SUCCESS", "FAILED", "UNKNOWN"):
+                        raise ValueError("잘못된 행동 응답")
+                    resource = response.get("resource_id")
+                    if response["status"] == "SUCCESS" and not (
+                        type(resource) is int and resource > 0 or isinstance(resource, str) and resource.strip()
+                    ):
+                        raise ValueError("성공 응답에 resource_id가 없습니다.")
+                    error = response.get("error")
+                    if error is not None and not isinstance(error, str):
+                        raise ValueError("잘못된 error 형식")
+                    result.update(status=response["status"],
+                                  resource_id=resource if response["status"] == "SUCCESS" else None,
+                                  error=error if response["status"] != "SUCCESS" else None)
+                except ActionFailed:
+                    result.update(status="FAILED", error="행동 API 미설정, 인증 누락 또는 확인된 실행 거절")
+                except Exception:
+                    result.update(status="UNKNOWN", error="실행 결과를 확인할 수 없습니다. 서버 결과 조회가 필요합니다.")
+            self._results[key] = (fingerprint, deepcopy(result))
+            return deepcopy(result)
